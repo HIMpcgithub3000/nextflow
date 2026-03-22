@@ -1,0 +1,40 @@
+
+# clerk configuration (can include secrets)
+/.clerk/
+
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# env (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# typescript
+*.tsbuildinfo
+
+# prisma
+# keep migrations; ignore generated client cache if any local noise
+
+# vercel
+.vercel
+
+# IDE
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# OS
+.DS_Store
+
+# trigger local dev state (do not commit)
+.trigger/
