@@ -83,6 +83,24 @@ function targetInputType(nodeType: NodeKind, handleId?: string | null): PortType
   return "any";
 }
 
+/**
+ * Graph persisted to Postgres must not include transient React Flow / runtime flags
+ * (e.g. `running` mid-execute, selection), or reload shows stuck "running" and bad diffs.
+ */
+function sanitizeNodesForPersistence(nodes: WorkflowNode[]): WorkflowNode[] {
+  return nodes.map((node) => {
+    const { selected: _sel, dragging: _drag, measured: _meas, ...rest } = node;
+    return {
+      ...rest,
+      data: { ...rest.data, running: false }
+    };
+  });
+}
+
+function graphJsonForPersistence(nodes: WorkflowNode[], edges: WorkflowEdge[]) {
+  return { nodes: sanitizeNodesForPersistence(nodes), edges };
+}
+
 function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center rounded border border-zinc-700/80 bg-zinc-900/80 px-1.5 py-0.5 text-[10px] text-zinc-300">
@@ -241,6 +259,29 @@ function TransloaditErrorCallout({ error }: { error: TransloaditUploadErrorState
       {error.hint ? (
         <p className="mt-1.5 break-words border-t border-red-500/20 pt-1.5 text-zinc-400">{error.hint}</p>
       ) : null}
+    </div>
+  );
+}
+
+/** Shows URL + thumbnail after Trigger tasks write `data.output` (crop / extract). */
+function MediaOutputPreview({ url, emptyLabel }: { url?: string; emptyLabel: string }) {
+  const u = (url ?? "").trim();
+  if (!u) {
+    return (
+      <p className="rounded-md border border-dashed border-zinc-700/80 bg-zinc-950/40 px-2 py-2 text-center text-[10px] text-zinc-500">
+        {emptyLabel}
+      </p>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      <p className="text-[9px] font-medium uppercase tracking-wide text-zinc-500">Output</p>
+      <p className="break-all font-mono text-[10px] leading-snug text-emerald-300/90" title={u}>
+        {u.length > 72 ? `${u.slice(0, 72)}…` : u}
+      </p>
+      <div className="rounded-md border border-zinc-700/80 bg-zinc-950/50 px-2 py-2 text-center">
+        <img src={u} alt="Task output" className="mx-auto max-h-24 rounded object-contain" />
+      </div>
     </div>
   );
 }
@@ -493,6 +534,10 @@ function CropNode({ id, data }: NodeProps<WorkflowNode>) {
           className="rounded-md border border-zinc-700 bg-zinc-900/80 px-2 py-1 disabled:opacity-50"
         />
       </div>
+      <MediaOutputPreview
+        url={data.output}
+        emptyLabel="After a successful run, the cropped image URL appears here. If a run is “partial”, open that run in Workflow History and check this node for an error."
+      />
       <Handle type="target" position={Position.Left} id="image_url" style={{ top: 58 }} className="!h-3 !w-3 !border-zinc-950 !bg-[#f2c14e]" />
       <Handle type="target" position={Position.Left} id="x_percent" style={{ top: 82 }} className="!h-3 !w-3 !border-zinc-950 !bg-[#f2c14e]" />
       <Handle type="target" position={Position.Left} id="y_percent" style={{ top: 98 }} className="!h-3 !w-3 !border-zinc-950 !bg-[#f2c14e]" />
@@ -528,6 +573,10 @@ function ExtractFrameNode({ id, data }: NodeProps<WorkflowNode>) {
         onChange={(e) => patchValues(id, { timestamp: e.target.value })}
         placeholder="Timestamp (seconds or 50%)"
         className="w-full rounded-md border border-zinc-700 bg-zinc-900/80 px-2 py-1 text-[11px] text-zinc-200 disabled:opacity-50"
+      />
+      <MediaOutputPreview
+        url={data.output}
+        emptyLabel="After a successful run, the frame image URL appears here. If a run is “partial”, check Workflow History for errors on this node."
       />
       <Handle type="target" position={Position.Left} id="video_url" style={{ top: 54 }} className="!h-3 !w-3 !border-zinc-950 !bg-[#f2c14e]" />
       <Handle type="target" position={Position.Left} id="timestamp" style={{ top: 90 }} className="!h-3 !w-3 !border-zinc-950 !bg-[#f2c14e]" />
@@ -610,7 +659,7 @@ function Builder() {
 
   const captureSavedGraph = useCallback(() => {
     const { nodes: n, edges: e } = useWorkflowStore.getState();
-    lastSavedGraphRef.current = JSON.stringify({ nodes: n, edges: e });
+    lastSavedGraphRef.current = JSON.stringify(graphJsonForPersistence(n, e));
   }, []);
   const selectedRun = useMemo(() => runs.find((r) => r.id === selectedRunId), [runs, selectedRunId]);
   const nodesById = useMemo(() => Object.fromEntries(nodes.map((node) => [node.id, node])), [nodes]);
@@ -730,7 +779,7 @@ function Builder() {
       if (data.length > 0) {
         const first = data[0];
         if (first.graphJson?.nodes && first.graphJson?.edges) {
-          setNodes(first.graphJson.nodes);
+          setNodes(sanitizeNodesForPersistence(first.graphJson.nodes as WorkflowNode[]));
           setEdges(first.graphJson.edges);
         }
         setWorkflowId(first.id);
@@ -738,7 +787,7 @@ function Builder() {
       }
       setPersistEnabled(true);
       const { nodes: n, edges: e } = useWorkflowStore.getState();
-      lastSavedGraphRef.current = JSON.stringify({ nodes: n, edges: e });
+      lastSavedGraphRef.current = JSON.stringify(graphJsonForPersistence(n, e));
     };
     void bootstrap();
   }, [hydrateRuns, setEdges, setNodes, setWorkflowId]);
@@ -746,7 +795,7 @@ function Builder() {
   /** Debounced autosave — persists the canvas without requiring Run or manual Save. */
   useEffect(() => {
     if (!persistEnabled) return;
-    const json = JSON.stringify({ nodes, edges });
+    const json = JSON.stringify(graphJsonForPersistence(nodes, edges));
     if (json === lastSavedGraphRef.current) return;
 
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
@@ -761,7 +810,7 @@ function Builder() {
           body: JSON.stringify({
             id: wid,
             name: "Product Marketing Kit Generator",
-            graphJson: { nodes: n, edges: ed }
+            graphJson: graphJsonForPersistence(n, ed)
           })
         });
         if (!res.ok) {
@@ -770,10 +819,8 @@ function Builder() {
         }
         const data = (await res.json()) as { id: string };
         setWorkflowId(data.id);
-        lastSavedGraphRef.current = JSON.stringify({
-          nodes: useWorkflowStore.getState().nodes,
-          edges: useWorkflowStore.getState().edges
-        });
+        const st = useWorkflowStore.getState();
+        lastSavedGraphRef.current = JSON.stringify(graphJsonForPersistence(st.nodes, st.edges));
         setSaveUi("saved");
         window.setTimeout(() => setSaveUi("idle"), 2000);
       } catch {
@@ -790,7 +837,7 @@ function Builder() {
     const payload = {
       id: workflowId,
       name: "Product Marketing Kit Generator",
-      graphJson: { nodes, edges }
+      graphJson: graphJsonForPersistence(nodes, edges)
     };
     const response = await fetch("/api/workflows", {
       method: "POST",

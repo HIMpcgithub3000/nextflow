@@ -1,40 +1,84 @@
-
-# clerk configuration (can include secrets)
-/.clerk/
-
-# dependencies
+# =========================
+# 📦 DEPENDENCIES
+# =========================
 /node_modules
+/.pnp
+.pnp.js
+.pnp.cjs
 
-# next.js
+# =========================
+# 🚀 NEXT.JS & BUILD OUTPUTS
+# =========================
 /.next/
 /out/
+/build
+/dist
+*.tsbuildinfo
 
-# env (never commit secrets)
+# =========================
+# 🔐 ENVIRONMENT VARIABLES (CRITICAL)
+# =========================
 .env
 .env.local
-.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
 
-# debug
+# =========================
+# ⚙️ TRIGGER.DEV
+# =========================
+# Ignores local v3 dev state (prevents sync conflicts)
+.trigger/
+
+# =========================
+# 🗄️ PRISMA
+# =========================
+# Note: Do NOT ignore /prisma/migrations! Those must be committed.
+# Ignore local SQLite databases if you ever use them for quick testing
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# =========================
+# ☁️ VERCEL
+# =========================
+.vercel
+
+# =========================
+# 📝 LOGS & DIAGNOSTICS
+# =========================
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+/logs
+*.log
 
-# typescript
-*.tsbuildinfo
+# =========================
+# 🧪 TESTING & COVERAGE
+# =========================
+/coverage
+/.nyc_output
 
-# prisma
-# keep migrations; ignore generated client cache if any local noise
-
-# vercel
-.vercel
-
-# IDE
-.idea
+# =========================
+# 💻 IDE & EDITORS
+# =========================
+.idea/
 .vscode/*
 !.vscode/extensions.json
+!.vscode/settings.json
+*.swp
+*.swo
 
-# OS
+# =========================
+# 🍎 OS GENERATED FILES
+# =========================
 .DS_Store
-
-# trigger local dev state (do not commit)
-.trigger/
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

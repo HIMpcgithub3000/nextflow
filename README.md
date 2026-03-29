@@ -34,3 +34,12 @@ npm run dev
 | `npm run trigger:deploy` | Deploy tasks + sync env to Trigger |
 | `npx prisma migrate dev` | DB migrations (dev) |
 | `npx prisma migrate deploy` | DB migrations (prod) |
+
+## Deploy to Vercel
+
+1. Push your repo to GitHub and [import the project in Vercel](https://vercel.com/new).
+2. Set **environment variables** (Clerk, `DATABASE_URL` from Neon, `TRIGGER_SECRET_KEY`, Transloadit, etc.) — see **`docs/VERCEL.md`** for the full checklist.
+3. Run migrations against production: `DATABASE_URL="…" npx prisma migrate deploy`.
+4. Deploy Trigger workers: `npm run trigger:deploy` so cloud tasks match `src/trigger/tasks.ts` and env syncs to Trigger.
+
+**Note:** Use Neon’s **pooled** connection string for serverless. Production Trigger runs need a **production** `TRIGGER_SECRET_KEY` from the Trigger dashboard, not the dev key.
