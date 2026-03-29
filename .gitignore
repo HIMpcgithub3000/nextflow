@@ -28,14 +28,11 @@
 # =========================
 # ⚙️ TRIGGER.DEV
 # =========================
-# Ignores local v3 dev state (prevents sync conflicts)
 .trigger/
 
 # =========================
 # 🗄️ PRISMA
 # =========================
-# Note: Do NOT ignore /prisma/migrations! Those must be committed.
-# Ignore local SQLite databases if you ever use them for quick testing
 *.db
 *.db-journal
 *.sqlite
