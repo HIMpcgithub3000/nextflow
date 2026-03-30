@@ -20,7 +20,6 @@
   "license": "ISC",
   "dependencies": {
     "@clerk/nextjs": "^7.0.6",
-    "@ffprobe-installer/ffprobe": "^2.1.2",
     "@google/generative-ai": "^0.24.1",
     "@prisma/adapter-neon": "6.19.2",
     "@prisma/client": "6.19.2",

@@ -15,7 +15,7 @@ npm run dev
 ```
 
 - App: [http://localhost:3000/workflow](http://localhost:3000/workflow) (home redirects).
-- Trigger.dev local worker: `npm run trigger:dev` (requires Trigger + Gemini env; see `docs/TRIGGER_ENV.md`). For **crop/frame** tasks, the worker resolves **ffmpeg/ffprobe** from PATH, **`FFMPEG_PATH`/`FFPROBE_PATH`**, or bundled **`ffmpeg-static`** / **`@ffprobe-installer/ffprobe`** after `npm install`.
+- Trigger.dev local worker: `npm run trigger:dev` (requires Trigger + Gemini env; see `docs/TRIGGER_ENV.md`). For **crop/frame** tasks, the worker resolves **ffmpeg** from PATH, **`FFMPEG_PATH`**, or **`ffmpeg-static`**; frame **%** seeks use **ffmpeg** stderr for duration.
 
 ## Architecture notes
 

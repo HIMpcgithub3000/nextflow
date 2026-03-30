@@ -5,7 +5,6 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
-import ffprobeInstaller from "@ffprobe-installer/ffprobe";
 import ffmpegStatic from "ffmpeg-static";
 import { task } from "@trigger.dev/sdk";
 import { Transloadit } from "transloadit";
@@ -113,7 +112,6 @@ function whichOnPath(cmd: string): string | null {
 }
 
 let cachedFfmpeg: string | null = null;
-let cachedFfprobe: string | null = null;
 
 /** Resolve ffmpeg binary from `ffmpeg-static` even when the default export path is wrong (bundlers / CWD). */
 function resolveBundledFfmpegPath(): string | null {
@@ -141,38 +139,6 @@ function resolveBundledFfmpegPath(): string | null {
       }
     } catch {
       /* exists but not marked executable — still try (some environments strip +x) */
-      if (existsSync(p)) return p;
-    }
-  }
-  return null;
-}
-
-/** Resolve ffprobe from `@ffprobe-installer/*` + cwd fallbacks. */
-function resolveBundledFfprobePath(): string | null {
-  const candidates: string[] = [];
-  try {
-    if (ffprobeInstaller?.path) candidates.push(ffprobeInstaller.path);
-  } catch {
-    /* ignore */
-  }
-  const id = `${process.platform}-${process.arch}`;
-  const name = process.platform === "win32" ? "ffprobe.exe" : "ffprobe";
-  candidates.push(join(process.cwd(), "node_modules", "@ffprobe-installer", id, name));
-  try {
-    const req = createRequire(import.meta.url);
-    const mod = req("@ffprobe-installer/ffprobe") as { path?: string };
-    if (mod?.path) candidates.push(mod.path);
-  } catch {
-    /* ignore */
-  }
-  for (const p of candidates) {
-    if (!p) continue;
-    try {
-      if (existsSync(p)) {
-        accessSync(p, fsConstants.X_OK);
-        return p;
-      }
-    } catch {
       if (existsSync(p)) return p;
     }
   }
@@ -231,60 +197,8 @@ function resolveFfmpeg(): string {
   );
 }
 
-function resolveFfprobe(): string {
-  if (cachedFfprobe) return cachedFfprobe;
-
-  const fromEnv = process.env.FFPROBE_PATH?.trim();
-  if (fromEnv) {
-    try {
-      accessSync(fromEnv, fsConstants.X_OK);
-      cachedFfprobe = fromEnv;
-      return fromEnv;
-    } catch {
-      throw new Error(`FFPROBE_PATH is set but not executable: ${fromEnv}`);
-    }
-  }
-
-  const which = whichOnPath("ffprobe");
-  if (which) {
-    cachedFfprobe = which;
-    return which;
-  }
-
-  const fallbacks =
-    process.platform === "darwin"
-      ? ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"]
-      : process.platform === "linux"
-        ? ["/usr/bin/ffprobe", "/usr/local/bin/ffprobe"]
-        : [];
-  for (const p of fallbacks) {
-    try {
-      accessSync(p, fsConstants.X_OK);
-      cachedFfprobe = p;
-      return p;
-    } catch {
-      /* try next */
-    }
-  }
-
-  const bundledProbe = resolveBundledFfprobePath();
-  if (bundledProbe) {
-    cachedFfprobe = bundledProbe;
-    return bundledProbe;
-  }
-
-  throw new Error(
-    "ffprobe not found. Install ffmpeg (`brew install ffmpeg`), set FFPROBE_PATH, or ensure `@ffprobe-installer/ffprobe` " +
-      "is installed (`npm install`) and restart `npm run trigger:dev`."
-  );
-}
-
 function ffmpegBin() {
   return resolveFfmpeg();
-}
-
-function ffprobeBin() {
-  return resolveFfprobe();
 }
 
 async function downloadToFile(url: string, dest: string) {
@@ -404,19 +318,27 @@ const framePayload = z
     timestamp: p.timestamp?.trim() || "0"
   }));
 
+/** Duration via ffmpeg stderr — avoids ffprobe / `@ffprobe-installer/*` (breaks Trigger Linux bundle). */
 async function probeDurationSeconds(videoPath: string): Promise<number> {
-  const { stdout } = await execFileAsync(ffprobeBin(), [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    videoPath
-  ]);
-  const d = parseFloat(String(stdout).trim());
-  if (!Number.isFinite(d) || d <= 0) throw new Error("Could not read video duration");
-  return d;
+  const ffmpeg = ffmpegBin();
+  let stderr = "";
+  try {
+    await execFileAsync(ffmpeg, ["-hide_banner", "-i", videoPath, "-f", "null", "-"], {
+      maxBuffer: 12 * 1024 * 1024
+    });
+  } catch (err: unknown) {
+    const e = err as { stderr?: string | Buffer };
+    stderr =
+      typeof e.stderr === "string" ? e.stderr : e.stderr ? Buffer.from(e.stderr).toString("utf8") : "";
+  }
+  const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
+  if (!m) throw new Error("Could not read video duration from ffmpeg");
+  const hh = parseInt(m[1], 10);
+  const mm = parseInt(m[2], 10);
+  const sec = parseFloat(m[3]);
+  const total = hh * 3600 + mm * 60 + sec;
+  if (!Number.isFinite(total) || total <= 0) throw new Error("Invalid video duration");
+  return total;
 }
 
 /** FFmpeg extract frame + Transloadit upload */

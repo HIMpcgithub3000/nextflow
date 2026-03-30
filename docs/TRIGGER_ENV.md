@@ -59,7 +59,7 @@ Local **`npx trigger.dev dev`** runs tasks on your machine. If you see **`Error:
 
    Apple Silicon Homebrew uses `/opt/homebrew/bin`; Intel macOS often `/usr/local/bin`.
 
-The task code resolves **`which ffmpeg`**, then common Homebrew paths, then **`FFMPEG_PATH`**, then the **bundled** binaries from npm **`ffmpeg-static`** and **`@ffprobe-installer/ffprobe`** (so `npm install` is often enough for local `npm run trigger:dev` without Homebrew).
+The task code resolves **`which ffmpeg`**, then common Homebrew paths, then **`FFMPEG_PATH`**, then **`ffmpeg-static`**. **Percentage timestamps** on extract-frame use **`ffmpeg -i`** stderr parsing for duration (no separate ffprobe package — avoids Trigger Linux bundle issues).
 
 **Trigger.dev cloud** builds bundle FFmpeg via `trigger.config.ts` (`ffmpeg()` extension) — cloud runs don’t rely on your laptop’s `brew` binary.
 
