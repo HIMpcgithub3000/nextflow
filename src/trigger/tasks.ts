@@ -323,16 +323,17 @@ async function probeDurationSeconds(videoPath: string): Promise<number> {
   const ffmpeg = ffmpegBin();
   let stderr = "";
   try {
-    await execFileAsync(ffmpeg, ["-hide_banner", "-i", videoPath, "-f", "null", "-"], {
+    const result = await execFileAsync(ffmpeg, ["-hide_banner", "-i", videoPath, "-f", "null", "-"], {
       maxBuffer: 12 * 1024 * 1024
     });
+    stderr = typeof result.stderr === "string" ? result.stderr : String(result.stderr ?? "");
   } catch (err: unknown) {
     const e = err as { stderr?: string | Buffer };
     stderr =
       typeof e.stderr === "string" ? e.stderr : e.stderr ? Buffer.from(e.stderr).toString("utf8") : "";
   }
   const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+\.?\d*)/);
-  if (!m) throw new Error("Could not read video duration from ffmpeg");
+  if (!m) throw new Error(`Could not read video duration from ffmpeg. stderr: ${stderr.slice(0, 500)}`);
   const hh = parseInt(m[1], 10);
   const mm = parseInt(m[2], 10);
   const sec = parseFloat(m[3]);
