@@ -97,6 +97,55 @@ function sanitizeNodesForPersistence(nodes: WorkflowNode[]): WorkflowNode[] {
   });
 }
 
+function isFiniteNumber(n: unknown): n is number {
+  return typeof n === "number" && Number.isFinite(n);
+}
+
+/**
+ * React Flow requires every node to have `position: { x, y }` with finite numbers.
+ * DB / JSON can omit or corrupt `position` after edits or legacy saves.
+ */
+function normalizeNodesForReactFlow(nodes: WorkflowNode[]): WorkflowNode[] {
+  let fixedCount = 0;
+  const _fixedIds: string[] = [];
+  const safe = nodes.map((node) => {
+    const p = node.position;
+    const ok =
+      p != null &&
+      typeof p === "object" &&
+      isFiniteNumber(p.x) &&
+      isFiniteNumber(p.y);
+    if (!ok) {
+      fixedCount += 1;
+      if (node.id) _fixedIds.push(node.id);
+    }
+    const position = ok ? { x: p!.x, y: p!.y } : { x: 0, y: 0 };
+    const data = node.data ?? {};
+    return {
+      ...node,
+      position,
+      data
+    };
+  });
+  // #region agent log
+  if (fixedCount > 0) {
+    fetch("http://127.0.0.1:7300/ingest/b7fd7381-15de-4a94-a03a-88af50df8297", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "fe1781" },
+      body: JSON.stringify({
+        sessionId: "fe1781",
+        location: "workflow-builder.tsx:normalizeNodesForReactFlow",
+        message: "normalized invalid node positions",
+        data: { fixedCount, sampleNodeIds: _fixedIds.slice(0, 15) },
+        timestamp: Date.now(),
+        hypothesisId: "H1"
+      })
+    }).catch(() => {});
+  }
+  // #endregion
+  return safe;
+}
+
 function graphJsonForPersistence(nodes: WorkflowNode[], edges: WorkflowEdge[]) {
   return { nodes: sanitizeNodesForPersistence(nodes), edges };
 }
@@ -705,7 +754,27 @@ function Builder() {
           const data = JSON.parse(String(reader.result)) as { nodes?: WorkflowNode[]; edges?: WorkflowEdge[] };
           if (data.nodes && data.edges) {
             pushSnapshot();
-            setNodes(data.nodes);
+            // #region agent log
+            fetch("http://127.0.0.1:7300/ingest/b7fd7381-15de-4a94-a03a-88af50df8297", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "fe1781" },
+              body: JSON.stringify({
+                sessionId: "fe1781",
+                location: "workflow-builder.tsx:onImportFile",
+                message: "import JSON applying normalizeNodesForReactFlow",
+                data: { nodeCount: data.nodes.length },
+                timestamp: Date.now(),
+                hypothesisId: "H4"
+              })
+            }).catch(() => {});
+            // #endregion
+            const fetchedNodes = data.nodes as WorkflowNode[];
+            const safeNodes = fetchedNodes.map((node) => ({
+              ...node,
+              position: node.position?.x !== undefined ? node.position : { x: 0, y: 0 },
+              data: node.data || {}
+            }));
+            setNodes(normalizeNodesForReactFlow(safeNodes));
             setEdges(data.edges);
           }
         } catch {
@@ -779,7 +848,28 @@ function Builder() {
       if (data.length > 0) {
         const first = data[0];
         if (first.graphJson?.nodes && first.graphJson?.edges) {
-          setNodes(sanitizeNodesForPersistence(first.graphJson.nodes as WorkflowNode[]));
+          const fetchedNodes = first.graphJson.nodes as WorkflowNode[];
+          const safeNodes = fetchedNodes.map((node) => ({
+            ...node,
+            position: node.position?.x !== undefined ? node.position : { x: 0, y: 0 },
+            data: node.data || {}
+          }));
+          const normalized = normalizeNodesForReactFlow(safeNodes);
+          // #region agent log
+          fetch("http://127.0.0.1:7300/ingest/b7fd7381-15de-4a94-a03a-88af50df8297", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "fe1781" },
+            body: JSON.stringify({
+              sessionId: "fe1781",
+              location: "workflow-builder.tsx:bootstrap",
+              message: "GET /api/workflows hydrate setNodes",
+              data: { nodeCount: fetchedNodes.length },
+              timestamp: Date.now(),
+              hypothesisId: "H5"
+            })
+          }).catch(() => {});
+          // #endregion
+          setNodes(sanitizeNodesForPersistence(normalized));
           setEdges(first.graphJson.edges);
         }
         setWorkflowId(first.id);
