@@ -19,7 +19,7 @@ if (!projectId) {
 
 export default defineConfig({
   project: projectId,
-  runtime: "node",
+  runtime: "node-24",
   maxDuration: 300,
   build: {
     extensions: [
