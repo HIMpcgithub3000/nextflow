@@ -956,7 +956,7 @@ function Builder() {
       >
         <div className="mb-4 flex items-center justify-between gap-2">
           <h1 className="text-xl font-semibold tracking-tight">NextFlow</h1>
-          <UserButton />
+          <AuthUserSlot />
         </div>
         <div className="mb-3 grid grid-cols-2 gap-2">
           <button
@@ -1170,6 +1170,20 @@ function Builder() {
           </div>
         )}
       </aside>
+    </div>
+  );
+}
+
+
+function AuthUserSlot() {
+  const hasClerk = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim());
+  if (hasClerk) {
+    return <AuthUserSlot />;
+  }
+  return (
+    <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[11px] text-zinc-300 font-medium">
+      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+      <span>Nexus Dev</span>
     </div>
   );
 }

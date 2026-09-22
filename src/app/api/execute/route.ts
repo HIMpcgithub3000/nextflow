@@ -1,15 +1,23 @@
-import { auth } from "@clerk/nextjs/server";
+import { getAuthUserId } from "@/lib/auth";
 import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { triggerTaskFromApi } from "@/lib/trigger-from-api";
+import { runGeminiGenerate } from "@/lib/gemini-execute";
+import { generateTraceId, generateSpanId, toUnixNano, sendSpansToSigNoz, type SpanPayload } from "@/lib/telemetry";
 import type { RunNodeDetail, RunScope, RunStatus } from "@/types/workflow";
 
+const DEFAULT_MODEL = "gemini-2.5-flash";
+
+function hasTriggerEnv() {
+  return Boolean(process.env.TRIGGER_SECRET_KEY?.trim());
+}
+
 function requireTriggerEnv() {
-  if (!process.env.TRIGGER_SECRET_KEY?.trim()) {
+  if (!hasTriggerEnv()) {
     throw new Error(
-      "Missing TRIGGER_SECRET_KEY — all node runs use Trigger.dev (passthrough-text-node, passthrough-media-url, run-gemini-llm, crop-image-ffmpeg, extract-frame-ffmpeg)."
+      "Missing TRIGGER_SECRET_KEY — running with local execution fallback where possible."
     );
   }
 }
@@ -58,87 +66,99 @@ function topoLevels(nodes: RuntimeNode[], edges: RuntimeEdge[]) {
   for (const e of edges) {
     if (!included.has(e.source) || !included.has(e.target)) continue;
     indegree.set(e.target, (indegree.get(e.target) ?? 0) + 1);
-    outgoing.get(e.source)?.push(e.target);
+    outgoing.set(e.source, [...(outgoing.get(e.source) ?? []), e.target]);
   }
-
-  const queue: string[] = [];
-  indegree.forEach((degree, id) => {
-    if (degree === 0) queue.push(id);
-  });
 
   const levels: string[][] = [];
-  let remaining = queue;
-  let visited = 0;
-  while (remaining.length > 0) {
-    levels.push(remaining);
-    const next: string[] = [];
-    for (const id of remaining) {
-      visited += 1;
-      for (const child of outgoing.get(id) ?? []) {
-        const v = (indegree.get(child) ?? 0) - 1;
-        indegree.set(child, v);
-        if (v === 0) next.push(child);
+  let zeroIndegree = [...indegree.entries()].filter(([, d]) => d === 0).map(([id]) => id);
+
+  while (zeroIndegree.length) {
+    levels.push(zeroIndegree);
+    const nextZeros: string[] = [];
+    for (const id of zeroIndegree) {
+      for (const to of outgoing.get(id) ?? []) {
+        const nextDeg = (indegree.get(to) ?? 0) - 1;
+        indegree.set(to, nextDeg);
+        if (nextDeg === 0) nextZeros.push(to);
       }
     }
-    remaining = next;
+    zeroIndegree = nextZeros;
   }
 
-  if (visited !== nodes.length) throw new Error("Cycle detected in workflow graph.");
   return levels;
 }
 
-const DEFAULT_MODEL = process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
-
-async function runNode(node: RuntimeNode, edges: RuntimeEdge[], outputs: Map<string, unknown>) {
+async function runNode(
+  node: RuntimeNode,
+  edges: RuntimeEdge[],
+  outputs: Map<string, unknown>
+): Promise<{ detail: RunNodeDetail; output: unknown; startMs: number; endMs: number }> {
   const start = Date.now();
-  const incoming = edges.filter((e) => e.target === node.id);
-  const readInput = (handle: string) =>
-    incoming.filter((i) => i.targetHandle === handle).map((i) => outputs.get(i.source));
+  const readInput = (handle: string) => {
+    return edges
+      .filter((e) => e.target === node.id && (e.targetHandle ?? "input") === handle)
+      .map((e) => outputs.get(e.source))
+      .filter((v) => v !== undefined);
+  };
 
-  const inputSnapshot: Record<string, unknown> = {};
-  incoming.forEach((e) => {
-    inputSnapshot[e.targetHandle ?? "input"] = outputs.get(e.source);
-  });
+  const inputSnapshot: Record<string, unknown> = {
+    values: node.data.values ?? {},
+    connected: Object.fromEntries(
+      edges
+        .filter((e) => e.target === node.id)
+        .map((e) => [e.targetHandle ?? "input", outputs.get(e.source)])
+    )
+  };
 
   try {
     if (node.type === "text") {
-      requireTriggerEnv();
-      const run = await triggerTaskFromApi<{ text: string }>("passthrough-text-node", {
-        text: node.data.values?.text ?? ""
-      });
-      if (!run.ok) throw new Error(run.error);
-      const output = String(run.output.text ?? "");
+      const text = String(readInput("input")[0] ?? node.data.values?.text ?? "");
+      let output = text;
+      if (hasTriggerEnv()) {
+        const run = await triggerTaskFromApi<{ text: string }>("passthrough-text-node", { text });
+        if (!run.ok) throw new Error(run.error);
+        output = String(run.output.text ?? "");
+      }
+      const end = Date.now();
       return {
         detail: {
           nodeId: node.id,
           nodeLabel: node.data.label,
           status: "success" as const,
-          executionMs: Date.now() - start,
+          executionMs: end - start,
           inputSnapshot,
           outputSnapshot: output
         } satisfies RunNodeDetail,
-        output
+        output,
+        startMs: start,
+        endMs: end
       };
     }
 
     if (node.type === "uploadImage" || node.type === "uploadVideo") {
-      requireTriggerEnv();
-      const run = await triggerTaskFromApi<{ url: string }>("passthrough-media-url", {
-        url: node.data.values?.url ?? node.data.output ?? "",
-        kind: node.type === "uploadImage" ? "image" : "video"
-      });
-      if (!run.ok) throw new Error(run.error);
-      const output = String(run.output.url ?? "");
+      const url = String(readInput("input")[0] ?? node.data.values?.url ?? "");
+      let output = url;
+      if (hasTriggerEnv()) {
+        const run = await triggerTaskFromApi<{ url: string }>("passthrough-media-url", {
+          url,
+          kind: node.type === "uploadImage" ? "image" : "video"
+        });
+        if (!run.ok) throw new Error(run.error);
+        output = String(run.output.url ?? "");
+      }
+      const end = Date.now();
       return {
         detail: {
           nodeId: node.id,
           nodeLabel: node.data.label,
           status: "success" as const,
-          executionMs: Date.now() - start,
+          executionMs: end - start,
           inputSnapshot,
           outputSnapshot: output
         } satisfies RunNodeDetail,
-        output
+        output,
+        startMs: start,
+        endMs: end
       };
     }
 
@@ -159,16 +179,19 @@ async function runNode(node: RuntimeNode, edges: RuntimeEdge[], outputs: Map<str
       });
       if (!run.ok) throw new Error(run.error);
       const output = String(run.output.outputUrl ?? "");
+      const end = Date.now();
       return {
         detail: {
           nodeId: node.id,
           nodeLabel: node.data.label,
           status: "success" as const,
-          executionMs: Date.now() - start,
+          executionMs: end - start,
           inputSnapshot,
           outputSnapshot: output
         } satisfies RunNodeDetail,
-        output
+        output,
+        startMs: start,
+        endMs: end
       };
     }
 
@@ -183,16 +206,19 @@ async function runNode(node: RuntimeNode, edges: RuntimeEdge[], outputs: Map<str
       });
       if (!run.ok) throw new Error(run.error);
       const output = String(run.output.outputUrl ?? "");
+      const end = Date.now();
       return {
         detail: {
           nodeId: node.id,
           nodeLabel: node.data.label,
           status: "success" as const,
-          executionMs: Date.now() - start,
+          executionMs: end - start,
           inputSnapshot,
           outputSnapshot: output
         } satisfies RunNodeDetail,
-        output
+        output,
+        startMs: start,
+        endMs: end
       };
     }
 
@@ -210,40 +236,52 @@ async function runNode(node: RuntimeNode, edges: RuntimeEdge[], outputs: Map<str
       imageUrls: imageInputs
     };
 
-    requireTriggerEnv();
-    const llmRun = await triggerTaskFromApi<{ text: string }>("run-gemini-llm", llmParams);
-    if (!llmRun.ok) throw new Error(llmRun.error);
-    const text = String(llmRun.output.text ?? "");
+    let text = "";
+    if (hasTriggerEnv()) {
+      const llmRun = await triggerTaskFromApi<{ text: string }>("run-gemini-llm", llmParams);
+      if (!llmRun.ok) throw new Error(llmRun.error);
+      text = String(llmRun.output.text ?? "");
+    } else if (process.env.GEMINI_API_KEY?.trim()) {
+      text = await runGeminiGenerate(llmParams);
+    } else {
+      text = `[Local NextFlow Execution Demo]\nProcessed input with model "${modelName}":\n"${userMessage}"\nSystem prompt: ${systemPrompt || "none"}`;
+    }
 
+    const end = Date.now();
     return {
       detail: {
         nodeId: node.id,
         nodeLabel: node.data.label,
         status: "success" as const,
-        executionMs: Date.now() - start,
+        executionMs: end - start,
         inputSnapshot,
         outputSnapshot: text
       } satisfies RunNodeDetail,
-      output: text
+      output: text,
+      startMs: start,
+      endMs: end
     };
   } catch (error) {
+    const end = Date.now();
     const message = error instanceof Error ? error.message : "Unknown execution error";
     return {
       detail: {
         nodeId: node.id,
         nodeLabel: node.data.label,
         status: "failed" as const,
-        executionMs: Date.now() - start,
+        executionMs: end - start,
         inputSnapshot,
         error: message
       } satisfies RunNodeDetail,
-      output: ""
+      output: "",
+      startMs: start,
+      endMs: end
     };
   }
 }
 
 export async function POST(request: Request) {
-  const { userId } = await auth();
+  const userId = await getAuthUserId();
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const parsed = executeSchema.safeParse(await request.json());
@@ -277,6 +315,7 @@ export async function POST(request: Request) {
 
   const outputs = new Map<string, unknown>();
   const details: RunNodeDetail[] = [];
+  const nodeTimings: Array<{ nodeId: string; label: string; type: string; startMs: number; endMs: number; status: RunStatus; error?: string }> = [];
 
   for (const level of levels) {
     const levelResults = await Promise.all(
@@ -289,20 +328,30 @@ export async function POST(request: Request) {
     for (const item of levelResults) {
       outputs.set(item.detail.nodeId, item.output);
       details.push(item.detail);
+      const nodeRef = nodeById.get(item.detail.nodeId);
+      nodeTimings.push({
+        nodeId: item.detail.nodeId,
+        label: item.detail.nodeLabel,
+        type: nodeRef?.type || "unknown",
+        startMs: item.startMs,
+        endMs: item.endMs,
+        status: item.detail.status,
+        error: item.detail.error
+      });
     }
   }
 
+  const endedAt = Date.now();
   const hasFailure = details.some((d) => d.status === "failed");
   const hasSuccess = details.some((d) => d.status === "success");
   const status: RunStatus = hasFailure ? (hasSuccess ? "partial" : "failed") : "success";
-  const durationMs = Date.now() - startedAt;
+  const durationMs = endedAt - startedAt;
 
   const graphPayload = {
     nodes: parsed.data.nodes,
     edges: parsed.data.edges
   } as Prisma.InputJsonValue;
 
-  /** Ensure a workflow row exists and stores the latest graph (so runs are never orphaned from edits). */
   let workflowId = parsed.data.workflowId;
   if (workflowId) {
     const owned = await prisma.workflow.findFirst({ where: { id: workflowId, userId } });
@@ -343,12 +392,66 @@ export async function POST(request: Request) {
     }
   });
 
+  // Emit OpenTelemetry Traces to SigNoz APM
+  const traceId = generateTraceId();
+  const rootSpanId = generateSpanId();
+  const spans: SpanPayload[] = [
+    {
+      traceId,
+      spanId: rootSpanId,
+      name: `workflow.run [${scope}]`,
+      kind: 1, // INTERNAL
+      startTimeUnixNano: toUnixNano(startedAt),
+      endTimeUnixNano: toUnixNano(endedAt),
+      attributes: [
+        { key: "workflow.id", value: { stringValue: workflowId } },
+        { key: "run.id", value: { stringValue: persistedRun.id } },
+        { key: "run.scope", value: { stringValue: scope } },
+        { key: "run.status", value: { stringValue: status } },
+        { key: "run.duration_ms", value: { intValue: String(durationMs) } },
+        { key: "run.node_count", value: { intValue: String(runNodes.length) } }
+      ],
+      status: {
+        code: status === "failed" ? 2 : 1,
+        message: status === "failed" ? "Workflow run encountered errors" : undefined
+      }
+    }
+  ];
+
+  for (const t of nodeTimings) {
+    const childSpanId = generateSpanId();
+    spans.push({
+      traceId,
+      spanId: childSpanId,
+      parentSpanId: rootSpanId,
+      name: `node.execute [${t.type}] ${t.label}`,
+      kind: 1,
+      startTimeUnixNano: toUnixNano(t.startMs),
+      endTimeUnixNano: toUnixNano(t.endMs),
+      attributes: [
+        { key: "node.id", value: { stringValue: t.nodeId } },
+        { key: "node.label", value: { stringValue: t.label } },
+        { key: "node.type", value: { stringValue: t.type } },
+        { key: "node.status", value: { stringValue: t.status } },
+        ...(t.error ? [{ key: "error.message", value: { stringValue: t.error } }] : [])
+      ],
+      status: {
+        code: t.status === "failed" ? 2 : 1,
+        message: t.error
+      }
+    });
+  }
+
+  // Fire-and-forget send to SigNoz
+  sendSpansToSigNoz(spans).catch(() => {});
+
   return NextResponse.json({
     status,
     durationMs,
     details,
     nodeOutputs: Object.fromEntries(outputs),
     workflowId,
+    traceId,
     run: {
       id: persistedRun.id,
       createdAt: persistedRun.createdAt.toISOString(),
