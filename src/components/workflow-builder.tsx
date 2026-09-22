@@ -1178,7 +1178,7 @@ function Builder() {
 function AuthUserSlot() {
   const hasClerk = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim());
   if (hasClerk) {
-    return <AuthUserSlot />;
+    return <UserButton />;
   }
   return (
     <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-[11px] text-zinc-300 font-medium">
