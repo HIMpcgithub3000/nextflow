@@ -354,7 +354,7 @@ export async function POST(request: Request) {
 
   let workflowId = parsed.data.workflowId;
   if (workflowId) {
-    const owned = await prisma.workflow.findFirst({ where: { id: workflowId: workflowId as string, userId } });
+    const owned = await prisma.workflow.findFirst({ where: { id: workflowId, userId } });
     if (owned) {
       await prisma.workflow.update({
         where: { id: owned.id },
@@ -450,7 +450,7 @@ export async function POST(request: Request) {
     durationMs,
     details,
     nodeOutputs: Object.fromEntries(outputs),
-    workflowId: workflowId as string,
+    workflowId,
     traceId,
     run: {
       id: persistedRun.id,
