@@ -40,6 +40,7 @@ export function toUnixNano(timestampMs: number): string {
 export async function sendSpansToSigNoz(spans: SpanPayload[]): Promise<boolean> {
   const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() || "http://127.0.0.1:4318";
   const serviceName = process.env.OTEL_SERVICE_NAME?.trim() || "nextflow-workflow-engine";
+  const apiKey = process.env.SIGNOZ_API_KEY?.trim() || process.env.SIGNOZ_INGESTION_KEY?.trim();
 
   const payload = {
     resourceSpans: [
@@ -61,11 +62,20 @@ export async function sendSpansToSigNoz(spans: SpanPayload[]): Promise<boolean> 
     ]
   };
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  if (apiKey) {
+    headers["signoz-access-token"] = apiKey;
+    headers["signoz-ingestion-key"] = apiKey;
+    headers["SIGNOZ-API-KEY"] = apiKey;
+  }
+
   try {
     const url = `${endpoint.replace(/\/$/, "")}/v1/traces`;
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(4000)
     });

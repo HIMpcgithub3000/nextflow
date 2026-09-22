@@ -12,21 +12,44 @@ const runSchema = z.object({
 });
 
 export async function GET(req: Request) {
-  const userId = await getAuthUserId();
+  const userId = await getAuthUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const url = new URL(req.url);
   const workflowId = url.searchParams.get("workflowId");
-  if (!workflowId) return NextResponse.json({ error: "workflowId is required" }, { status: 400 });
+  const limit = url.searchParams.get("limit") ? Number(url.searchParams.get("limit")) : 50;
+
+  const whereClause: Record<string, unknown> = { userId };
+  if (workflowId) {
+    whereClause.workflowId = workflowId;
+  }
+
   const runs = await prisma.workflowRun.findMany({
-    where: { userId, workflowId },
+    where: whereClause,
     orderBy: { createdAt: "desc" },
-    take: 50
+    take: limit,
+    include: {
+      workflow: {
+        select: { name: true }
+      }
+    }
   });
-  return NextResponse.json(runs);
+
+  const formatted = runs.map(r => ({
+    id: r.id,
+    workflowId: r.workflowId,
+    workflowName: r.workflow?.name || "Workflow " + r.workflowId.slice(0, 8),
+    scope: r.scope,
+    status: r.status,
+    durationMs: r.durationMs,
+    details: r.detailsJson,
+    createdAt: r.createdAt.toISOString()
+  }));
+
+  return NextResponse.json(formatted);
 }
 
 export async function POST(req: Request) {
-  const userId = await getAuthUserId();
+  const userId = await getAuthUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const parsed = runSchema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });

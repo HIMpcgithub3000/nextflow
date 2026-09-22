@@ -281,7 +281,7 @@ async function runNode(
 }
 
 export async function POST(request: Request) {
-  const userId = await getAuthUserId();
+  const userId = await getAuthUserId(request);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const parsed = executeSchema.safeParse(await request.json());

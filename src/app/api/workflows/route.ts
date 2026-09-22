@@ -9,15 +9,15 @@ const workflowSchema = z.object({
   graphJson: z.any()
 });
 
-export async function GET() {
-  const userId = await getAuthUserId();
+export async function GET(req: Request) {
+  const userId = await getAuthUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const data = await prisma.workflow.findMany({ where: { userId }, orderBy: { updatedAt: "desc" } });
   return NextResponse.json(data);
 }
 
 export async function POST(req: Request) {
-  const userId = await getAuthUserId();
+  const userId = await getAuthUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const parsed = workflowSchema.safeParse(await req.json());
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
