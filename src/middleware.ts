@@ -10,6 +10,15 @@ const isProtectedRoute = createRouteMatcher([
 ]);
 
 export default function middleware(req: NextRequest, evt: any) {
+  // Allow API key authenticated requests directly through to route handlers
+  const configuredApiKey = process.env.NEXTFLOW_API_KEY?.trim();
+  if (configuredApiKey) {
+    const providedKey = req.headers.get("x-api-key") || req.headers.get("authorization")?.replace("Bearer ", "");
+    if (providedKey === configuredApiKey) {
+      return NextResponse.next();
+    }
+  }
+
   const hasClerkKey = Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.trim());
   if (!hasClerkKey) {
     return NextResponse.next();
