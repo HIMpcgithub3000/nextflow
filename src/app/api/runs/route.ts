@@ -34,7 +34,7 @@ export async function GET(req: Request) {
     }
   });
 
-  const formatted = runs.map(r => ({
+  const formatted = runs.map((r: any) => ({
     id: r.id,
     workflowId: r.workflowId,
     workflowName: r.workflow?.name || "Workflow " + r.workflowId.slice(0, 8),
