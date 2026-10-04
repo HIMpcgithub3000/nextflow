@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { sanitizeSpanPayloads } from "@/lib/log-sanitizer";
 
 export interface SpanAttribute {
   key: string;
@@ -42,6 +43,9 @@ export async function sendSpansToSigNoz(spans: SpanPayload[]): Promise<boolean> 
   const serviceName = process.env.OTEL_SERVICE_NAME?.trim() || "nextflow-workflow-engine";
   const apiKey = process.env.SIGNOZ_API_KEY?.trim() || process.env.SIGNOZ_INGESTION_KEY?.trim();
 
+  // Automatically sanitize all spans and attributes before telemetry transmission
+  const sanitizedSpans = sanitizeSpanPayloads(spans);
+
   const payload = {
     resourceSpans: [
       {
@@ -55,7 +59,7 @@ export async function sendSpansToSigNoz(spans: SpanPayload[]): Promise<boolean> 
         scopeSpans: [
           {
             scope: { name: "nextflow.workflow.tracer", version: "1.0.0" },
-            spans
+            spans: sanitizedSpans
           }
         ]
       }

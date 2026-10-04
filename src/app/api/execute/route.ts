@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { triggerTaskFromApi } from "@/lib/trigger-from-api";
 import { runGeminiGenerate } from "@/lib/gemini-execute";
 import { generateTraceId, generateSpanId, toUnixNano, sendSpansToSigNoz, type SpanPayload } from "@/lib/telemetry";
+import { sanitizeWorkflowRunDetails } from "@/lib/log-sanitizer";
 import type { RunNodeDetail, RunScope, RunStatus } from "@/types/workflow";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
@@ -381,6 +382,7 @@ export async function POST(request: Request) {
     workflowId = created.id;
   }
 
+  const sanitizedDetails = sanitizeWorkflowRunDetails(details);
   const persistedRun = await prisma.workflowRun.create({
     data: {
       userId,
@@ -388,7 +390,7 @@ export async function POST(request: Request) {
       scope: scope as RunScope,
       status,
       durationMs,
-      detailsJson: details as unknown as Prisma.InputJsonValue
+      detailsJson: sanitizedDetails as unknown as Prisma.InputJsonValue
     }
   });
 

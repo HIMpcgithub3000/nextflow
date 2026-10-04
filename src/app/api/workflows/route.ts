@@ -1,4 +1,4 @@
-import { getAuthUserId } from "@/lib/auth";
+import { getAuthUserId, isApiKeyRequest } from "@/lib/auth";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -10,9 +10,13 @@ const workflowSchema = z.object({
 });
 
 export async function GET(req: Request) {
+  const isApiKey = isApiKeyRequest(req);
   const userId = await getAuthUserId(req);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const data = await prisma.workflow.findMany({ where: { userId }, orderBy: { updatedAt: "desc" } });
+  const data = await prisma.workflow.findMany({
+    where: isApiKey ? {} : { userId },
+    orderBy: { updatedAt: "desc" }
+  });
   return NextResponse.json(data);
 }
 
