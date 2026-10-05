@@ -89,3 +89,77 @@ export async function sendSpansToSigNoz(spans: SpanPayload[]): Promise<boolean> 
     return false;
   }
 }
+
+export interface LogRecordPayload {
+  timeUnixNano: string;
+  traceId?: string;
+  spanId?: string;
+  severityNumber: number; // 9 = INFO, 17 = ERROR, 13 = WARN
+  severityText: string;
+  body: string;
+  attributes: Record<string, string | number | boolean>;
+}
+
+export async function sendLogsToSigNoz(logs: LogRecordPayload[]): Promise<boolean> {
+  const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT?.trim() || "http://127.0.0.1:4318";
+  const serviceName = process.env.OTEL_SERVICE_NAME?.trim() || "nextflow-workflow-engine";
+  const apiKey = process.env.SIGNOZ_API_KEY?.trim() || process.env.SIGNOZ_INGESTION_KEY?.trim();
+
+  const formattedLogs = logs.map((log) => ({
+    timeUnixNano: log.timeUnixNano,
+    traceId: log.traceId,
+    spanId: log.spanId,
+    severityNumber: log.severityNumber,
+    severityText: log.severityText,
+    body: { stringValue: log.body },
+    attributes: Object.entries(log.attributes).map(([key, val]) => {
+      if (typeof val === "number") return { key, value: { doubleValue: val } };
+      if (typeof val === "boolean") return { key, value: { boolValue: val } };
+      return { key, value: { stringValue: String(val) } };
+    })
+  }));
+
+  const payload = {
+    resourceLogs: [
+      {
+        resource: {
+          attributes: [
+            { key: "service.name", value: { stringValue: serviceName } },
+            { key: "deployment.environment", value: { stringValue: process.env.NODE_ENV || "production" } },
+            { key: "host.name", value: { stringValue: "nexus-ec2" } }
+          ]
+        },
+        scopeLogs: [
+          {
+            scope: { name: "nextflow.workflow.logger", version: "1.0.0" },
+            logRecords: formattedLogs
+          }
+        ]
+      }
+    ]
+  };
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+  if (apiKey) {
+    headers["signoz-access-token"] = apiKey;
+    headers["signoz-ingestion-key"] = apiKey;
+    headers["SIGNOZ-API-KEY"] = apiKey;
+  }
+
+  try {
+    const url = `${endpoint.replace(/\/$/, "")}/v1/logs`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(4000)
+    });
+    return res.ok;
+  } catch (err) {
+    console.warn("[Telemetry] Failed to send logs to SigNoz:", err instanceof Error ? err.message : err);
+    return false;
+  }
+}
+

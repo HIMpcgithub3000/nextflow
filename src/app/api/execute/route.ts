@@ -1,11 +1,11 @@
-import { getAuthUserId } from "@/lib/auth";
+import { getAuthUserId, isApiKeyRequest } from "@/lib/auth";
 import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { triggerTaskFromApi } from "@/lib/trigger-from-api";
 import { runGeminiGenerate } from "@/lib/gemini-execute";
-import { generateTraceId, generateSpanId, toUnixNano, sendSpansToSigNoz, type SpanPayload } from "@/lib/telemetry";
+import { generateTraceId, generateSpanId, toUnixNano, sendSpansToSigNoz, sendLogsToSigNoz, type SpanPayload, type LogRecordPayload } from "@/lib/telemetry";
 import { sanitizeWorkflowRunDetails } from "@/lib/log-sanitizer";
 import type { RunNodeDetail, RunScope, RunStatus } from "@/types/workflow";
 
@@ -41,6 +41,7 @@ const edgeSchema = z.object({
 
 const executeSchema = z.object({
   workflowId: z.string().optional(),
+  name: z.string().optional(),
   scope: z.enum(["full", "partial", "single"]),
   selectedNodeIds: z.array(z.string()).optional(),
   nodes: z.array(nodeSchema),
@@ -282,6 +283,7 @@ async function runNode(
 }
 
 export async function POST(request: Request) {
+  const isApiKey = isApiKeyRequest(request);
   const userId = await getAuthUserId(request);
   if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -354,18 +356,21 @@ export async function POST(request: Request) {
   } as Prisma.InputJsonValue;
 
   let workflowId = parsed.data.workflowId;
+  const workflowName = parsed.data.name || "Untitled Workflow";
   if (workflowId) {
-    const owned = await prisma.workflow.findFirst({ where: { id: workflowId, userId } });
+    const owned = await prisma.workflow.findFirst({
+      where: isApiKey ? { id: workflowId } : { id: workflowId, userId }
+    });
     if (owned) {
       await prisma.workflow.update({
         where: { id: owned.id },
-        data: { graphJson: graphPayload }
+        data: { name: workflowName, graphJson: graphPayload }
       });
     } else {
       const created = await prisma.workflow.create({
         data: {
           userId,
-          name: "Product Marketing Kit Generator",
+          name: workflowName,
           graphJson: graphPayload
         }
       });
@@ -375,7 +380,7 @@ export async function POST(request: Request) {
     const created = await prisma.workflow.create({
       data: {
         userId,
-        name: "Product Marketing Kit Generator",
+        name: workflowName,
         graphJson: graphPayload
       }
     });
@@ -401,12 +406,14 @@ export async function POST(request: Request) {
     {
       traceId,
       spanId: rootSpanId,
-      name: `workflow.run [${scope}]`,
+      name: `workflow.run [${scope}] ${workflowName}`,
       kind: 1, // INTERNAL
       startTimeUnixNano: toUnixNano(startedAt),
       endTimeUnixNano: toUnixNano(endedAt),
       attributes: [
         { key: "workflow.id", value: { stringValue: workflowId } },
+        { key: "workflow.name", value: { stringValue: workflowName } },
+        { key: "user.id", value: { stringValue: userId } },
         { key: "run.id", value: { stringValue: persistedRun.id } },
         { key: "run.scope", value: { stringValue: scope } },
         { key: "run.status", value: { stringValue: status } },
@@ -444,8 +451,52 @@ export async function POST(request: Request) {
     });
   }
 
-  // Fire-and-forget send to SigNoz
+  // Fire-and-forget send to SigNoz Traces
   sendSpansToSigNoz(spans).catch(() => {});
+
+  // Emit structured OpenTelemetry Logs to SigNoz
+  const logs: LogRecordPayload[] = [
+    {
+      timeUnixNano: toUnixNano(endedAt),
+      traceId,
+      spanId: rootSpanId,
+      severityNumber: status === "failed" ? 17 : 9,
+      severityText: status === "failed" ? "ERROR" : "INFO",
+      body: `Workflow [${workflowName}] (ID: ${workflowId}) executed with status "${status}" in ${durationMs}ms for user "${userId}".`,
+      attributes: {
+        "workflow.id": String(workflowId),
+        "workflow.name": workflowName,
+        "user.id": userId,
+        "run.id": persistedRun.id,
+        "run.status": status,
+        "run.duration_ms": durationMs,
+        "run.node_count": runNodes.length
+      }
+    }
+  ];
+
+  for (const t of nodeTimings) {
+    logs.push({
+      timeUnixNano: toUnixNano(t.endMs),
+      traceId,
+      spanId: rootSpanId,
+      severityNumber: t.status === "failed" ? 17 : 9,
+      severityText: t.status === "failed" ? "ERROR" : "INFO",
+      body: `Node [${t.label}] (${t.type}) ${t.status === "failed" ? "FAILED: " + (t.error || "unknown error") : "completed successfully in " + (t.endMs - t.startMs) + "ms"}.`,
+      attributes: {
+        "workflow.id": String(workflowId),
+        "workflow.name": workflowName,
+        "user.id": userId,
+        "node.id": t.nodeId,
+        "node.label": t.label,
+        "node.type": t.type,
+        "node.status": t.status,
+        ...(t.error ? { "error.message": t.error } : {})
+      }
+    });
+  }
+
+  sendLogsToSigNoz(logs).catch(() => {});
 
   return NextResponse.json({
     status,

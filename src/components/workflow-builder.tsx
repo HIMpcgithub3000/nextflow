@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { formatDateTimeForDisplay } from "@/lib/format-datetime";
 import { useWorkflowStore } from "@/store/workflow-store";
+import { sampleEdges, sampleNodes } from "@/lib/sample-workflow";
 import {
   WORKFLOW_EDGE_COLOR,
   type NodeKind,
@@ -657,6 +658,9 @@ function Builder() {
   const {
     workflowId,
     setWorkflowId,
+    workflowName,
+    setWorkflowName,
+    resetWorkflow,
     nodes,
     edges,
     runs,
@@ -682,6 +686,9 @@ function Builder() {
   const [persistHint, setPersistHint] = useState<string | null>(null);
   const [persistEnabled, setPersistEnabled] = useState(false);
   const [saveUi, setSaveUi] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [workflowsList, setWorkflowsList] = useState<
+    Array<{ id: string; name: string; updatedAt?: string; graphJson?: any }>
+  >([]);
 
   const captureSavedGraph = useCallback(() => {
     const { nodes: n, edges: e } = useWorkflowStore.getState();
@@ -790,6 +797,50 @@ function Builder() {
     [setRuns]
   );
 
+  const fetchWorkflowsList = useCallback(async () => {
+    try {
+      const response = await fetch("/api/workflows");
+      if (!response.ok) return;
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        setWorkflowsList(data);
+      }
+    } catch (e) {
+      console.warn("Could not fetch workflows list", e);
+    }
+  }, []);
+
+  const loadWorkflow = useCallback(
+    (wf: { id: string; name: string; graphJson?: any }) => {
+      if (wf.graphJson?.nodes && wf.graphJson?.edges) {
+        const fetchedNodes = wf.graphJson.nodes as WorkflowNode[];
+        const safeNodes = fetchedNodes.map((node) => ({
+          ...node,
+          position: node.position?.x !== undefined ? node.position : { x: 0, y: 0 },
+          data: node.data || {}
+        }));
+        const normalized = normalizeNodesForReactFlow(safeNodes);
+        setNodes(sanitizeNodesForPersistence(normalized));
+        setEdges(wf.graphJson.edges);
+      } else {
+        setNodes(sampleNodes);
+        setEdges(sampleEdges);
+      }
+      setWorkflowId(wf.id);
+      setWorkflowName(wf.name || "Untitled Canvas");
+      captureSavedGraph();
+      void hydrateRuns(wf.id);
+    },
+    [captureSavedGraph, hydrateRuns, setEdges, setNodes, setWorkflowId, setWorkflowName]
+  );
+
+  const handleNewCanvas = useCallback(() => {
+    const nextNum = workflowsList.length + 1;
+    resetWorkflow(`New Canvas ${nextNum}`);
+    setRuns([]);
+    captureSavedGraph();
+  }, [workflowsList.length, resetWorkflow, setRuns, captureSavedGraph]);
+
   useEffect(() => {
     const bootstrap = async () => {
       const response = await fetch("/api/workflows");
@@ -807,31 +858,26 @@ function Builder() {
         return;
       }
       setDbMessage(null);
-      const data = (await response.json()) as Array<{ id: string; graphJson: { nodes: WorkflowNode[]; edges: typeof edges } }>;
+      const data = (await response.json()) as Array<{
+        id: string;
+        name: string;
+        updatedAt?: string;
+        graphJson: { nodes: WorkflowNode[]; edges: typeof edges };
+      }>;
+      setWorkflowsList(data);
       if (data.length > 0) {
-        const first = data[0];
-        if (first.graphJson?.nodes && first.graphJson?.edges) {
-          const fetchedNodes = first.graphJson.nodes as WorkflowNode[];
-          const safeNodes = fetchedNodes.map((node) => ({
-            ...node,
-            position: node.position?.x !== undefined ? node.position : { x: 0, y: 0 },
-            data: node.data || {}
-          }));
-          const normalized = normalizeNodesForReactFlow(safeNodes);
-          setNodes(sanitizeNodesForPersistence(normalized));
-          setEdges(first.graphJson.edges);
-        }
-        setWorkflowId(first.id);
-        await hydrateRuns(first.id);
+        loadWorkflow(data[0]);
+      } else {
+        setWorkflowName("New Canvas 1");
       }
       setPersistEnabled(true);
       const { nodes: n, edges: e } = useWorkflowStore.getState();
       lastSavedGraphRef.current = JSON.stringify(graphJsonForPersistence(n, e));
     };
     void bootstrap();
-  }, [hydrateRuns, setEdges, setNodes, setWorkflowId]);
+  }, [loadWorkflow, setWorkflowName]);
 
-  /** Debounced autosave — persists the canvas without requiring Run or manual Save. */
+  /** Debounced autosave — persists active canvas without requiring Run or manual Save. */
   useEffect(() => {
     if (!persistEnabled) return;
     const json = JSON.stringify(graphJsonForPersistence(nodes, edges));
@@ -842,13 +888,13 @@ function Builder() {
       autosaveTimerRef.current = null;
       setSaveUi("saving");
       try {
-        const { workflowId: wid, nodes: n, edges: ed } = useWorkflowStore.getState();
+        const { workflowId: wid, workflowName: wname, nodes: n, edges: ed } = useWorkflowStore.getState();
         const res = await fetch("/api/workflows", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             id: wid,
-            name: "Product Marketing Kit Generator",
+            name: wname || "Untitled Canvas",
             graphJson: graphJsonForPersistence(n, ed)
           })
         });
@@ -856,12 +902,13 @@ function Builder() {
           setSaveUi("error");
           return;
         }
-        const data = (await res.json()) as { id: string };
+        const data = (await res.json()) as { id: string; name: string };
         setWorkflowId(data.id);
         const st = useWorkflowStore.getState();
         lastSavedGraphRef.current = JSON.stringify(graphJsonForPersistence(st.nodes, st.edges));
         setSaveUi("saved");
         window.setTimeout(() => setSaveUi("idle"), 2000);
+        void fetchWorkflowsList();
       } catch {
         setSaveUi("error");
       }
@@ -870,12 +917,15 @@ function Builder() {
     return () => {
       if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     };
-  }, [nodes, edges, persistEnabled, setWorkflowId]);
+  }, [nodes, edges, persistEnabled, setWorkflowId, fetchWorkflowsList]);
 
-  const saveWorkflow = async () => {
+  const saveWorkflow = async (isSaveAsNew = false) => {
+    setSaveUi("saving");
+    const targetId = isSaveAsNew ? undefined : workflowId;
+    const nameToSave = workflowName.trim() || "Untitled Canvas";
     const payload = {
-      id: workflowId,
-      name: "Product Marketing Kit Generator",
+      id: targetId,
+      name: nameToSave,
       graphJson: graphJsonForPersistence(nodes, edges)
     };
     const response = await fetch("/api/workflows", {
@@ -886,18 +936,21 @@ function Builder() {
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
       setDbMessage(
-        `Save failed (${response.status}). Ensure DATABASE_URL is set in .env (not overridden by an empty DATABASE_URL= in .env.local).`
+        `Save failed (${response.status}). Ensure DATABASE_URL is set in .env.`
       );
       console.error("POST /api/workflows", err);
+      setSaveUi("error");
       return;
     }
     setDbMessage(null);
     setPersistHint(null);
-    const created = (await response.json()) as { id: string };
+    const created = (await response.json()) as { id: string; name: string };
     setWorkflowId(created.id);
+    setWorkflowName(created.name);
     captureSavedGraph();
     setSaveUi("saved");
     window.setTimeout(() => setSaveUi("idle"), 2000);
+    await fetchWorkflowsList();
     await hydrateRuns(created.id);
   };
 
@@ -908,11 +961,13 @@ function Builder() {
     const targetSet = new Set(scope === "full" ? nodes.map((n) => n.id) : selectedNodeIds);
     setNodes(baseNodes.map((node) => ({ ...node, data: { ...node.data, running: targetSet.has(node.id) } })));
     try {
+      const { workflowName: currentName } = useWorkflowStore.getState();
       const response = await fetch("/api/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           workflowId,
+          name: currentName || "Untitled Canvas",
           scope,
           selectedNodeIds,
           nodes: nodes.map((n) => ({ id: n.id, type: n.type, data: n.data })),
@@ -954,17 +1009,76 @@ function Builder() {
           leftOpen ? "w-[286px] p-4" : "w-0 overflow-hidden border-0 p-0"
         }`}
       >
-        <div className="mb-4 flex items-center justify-between gap-2">
-          <h1 className="text-xl font-semibold tracking-tight">NextFlow</h1>
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded bg-violet-600 flex items-center justify-center font-bold text-xs text-white">
+              N
+            </div>
+            <h1 className="text-base font-bold tracking-tight">NextFlow</h1>
+          </div>
           <AuthUserSlot />
         </div>
-        <div className="mb-3 grid grid-cols-2 gap-2">
+
+        {/* Workflow Title Input */}
+        <div className="mb-2.5">
+          <label className="text-[10px] text-zinc-400 font-semibold uppercase tracking-wider block mb-1">
+            Canvas Name
+          </label>
+          <input
+            type="text"
+            value={workflowName}
+            onChange={(e) => setWorkflowName(e.target.value)}
+            placeholder="Canvas Title..."
+            className="w-full bg-zinc-900/90 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-xs font-medium text-white focus:border-violet-500 outline-none transition"
+          />
+        </div>
+
+        {/* Workflow Switcher Dropdown & New Button */}
+        <div className="mb-3">
+          <label className="text-[10px] text-zinc-400 font-semibold uppercase tracking-wider block mb-1">
+            Switch Canvas ({workflowsList.length})
+          </label>
+          <div className="flex items-center gap-1.5">
+            <select
+              value={workflowId || "__UNSAVED__"}
+              onChange={(e) => {
+                if (e.target.value === "__NEW__") {
+                  handleNewCanvas();
+                } else if (e.target.value !== "__UNSAVED__") {
+                  const target = workflowsList.find((w) => w.id === e.target.value);
+                  if (target) loadWorkflow(target);
+                }
+              }}
+              className="w-full bg-zinc-900/90 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus:border-violet-500 outline-none"
+            >
+              {workflowId ? null : <option value="__UNSAVED__">★ Current (Unsaved Canvas)</option>}
+              {workflowsList.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} {w.id === workflowId ? "✓ Active" : ""}
+                </option>
+              ))}
+              <option value="__NEW__">+ New Canvas...</option>
+            </select>
+
+            <button
+              type="button"
+              onClick={handleNewCanvas}
+              title="Create a new clean canvas"
+              className="px-2.5 py-1.5 rounded-lg border border-violet-500/40 bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 text-xs font-semibold whitespace-nowrap transition"
+            >
+              + New
+            </button>
+          </div>
+        </div>
+
+        {/* Save & Run Action Buttons */}
+        <div className="mb-2 grid grid-cols-2 gap-2">
           <button
             type="button"
-            onClick={saveWorkflow}
-            className="rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 py-1.5 text-xs hover:border-zinc-500"
+            onClick={() => void saveWorkflow(false)}
+            className="rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 py-1.5 text-xs font-medium hover:border-zinc-500 transition"
           >
-            Save
+            Save Canvas
             {saveUi === "saving" ? (
               <span className="ml-1 text-zinc-500">…</span>
             ) : saveUi === "saved" ? (
@@ -977,23 +1091,35 @@ function Builder() {
             type="button"
             onClick={() => void execute("full")}
             disabled={running}
-            className="rounded-lg border border-violet-500/60 bg-violet-500/20 px-2 py-1.5 text-xs disabled:opacity-50"
+            className="rounded-lg border border-violet-500/60 bg-violet-600 hover:bg-violet-500 text-white font-semibold px-2 py-1.5 text-xs disabled:opacity-50 transition shadow-sm"
           >
-            Run Full
+            {running ? "Executing..." : "Run Full"}
           </button>
         </div>
-        <div className="mb-3 grid grid-cols-2 gap-2">
+
+        <div className="mb-2 grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => void saveWorkflow(true)}
+            title="Save a duplicate copy as a new workflow"
+            className="rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 py-1.5 text-[11px] text-zinc-300 hover:border-zinc-500 transition"
+          >
+            Save as Copy
+          </button>
           <button
             type="button"
             onClick={exportWorkflow}
-            className="rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 py-1.5 text-xs hover:border-zinc-500"
+            className="rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 py-1.5 text-[11px] text-zinc-300 hover:border-zinc-500 transition"
           >
             Export JSON
           </button>
+        </div>
+
+        <div className="mb-3 grid grid-cols-1 gap-2">
           <button
             type="button"
             onClick={() => importRef.current?.click()}
-            className="rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 py-1.5 text-xs hover:border-zinc-500"
+            className="rounded-lg border border-zinc-700 bg-zinc-900/90 px-2 py-1.5 text-xs text-zinc-300 hover:border-zinc-500 transition"
           >
             Import JSON
           </button>

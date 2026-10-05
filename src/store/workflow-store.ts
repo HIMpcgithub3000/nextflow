@@ -18,6 +18,7 @@ type Snapshot = { nodes: WorkflowNode[]; edges: WorkflowEdge[] };
 
 type WorkflowState = {
   workflowId?: string;
+  workflowName: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   runs: WorkflowRun[];
@@ -32,6 +33,8 @@ type WorkflowState = {
   setEdges: (edges: WorkflowEdge[]) => void;
   updateNodeData: (nodeId: string, data: Partial<WorkflowNode["data"]>) => void;
   setWorkflowId: (workflowId?: string) => void;
+  setWorkflowName: (name: string) => void;
+  resetWorkflow: (name?: string) => void;
   setRuns: (runs: WorkflowRun[]) => void;
   addRun: (run: WorkflowRun) => void;
   selectRun: (runId?: string) => void;
@@ -42,6 +45,7 @@ type WorkflowState = {
 
 export const useWorkflowStore = create<WorkflowState>((set, get) => ({
   workflowId: undefined,
+  workflowName: "Untitled Workflow",
   nodes: sampleNodes,
   edges: sampleEdges,
   runs: [],
@@ -88,6 +92,18 @@ export const useWorkflowStore = create<WorkflowState>((set, get) => ({
       )
     })),
   setWorkflowId: (workflowId) => set({ workflowId }),
+  setWorkflowName: (workflowName) => set({ workflowName }),
+  resetWorkflow: (name = "Untitled Workflow") =>
+    set({
+      workflowId: undefined,
+      workflowName: name,
+      nodes: sampleNodes,
+      edges: sampleEdges,
+      runs: [],
+      history: [],
+      future: [],
+      selectedRunId: undefined,
+    }),
   setRuns: (runs) => set({ runs }),
   addRun: (run) => set((state) => ({ runs: [run, ...state.runs] })),
   selectRun: (runId) => set({ selectedRunId: runId }),

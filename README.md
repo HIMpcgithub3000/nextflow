@@ -1,175 +1,405 @@
-# NextFlow
+# NextFlow ⚡️
 
-**NextFlow** is a visual **LLM and media workflow builder** for teams and individuals who want to chain prompts, uploads, image/video transforms, and AI steps **without writing glue code**. You compose a directed graph on a canvas; the app validates connections, runs nodes in topological order, and persists workflows and execution history per user.
+<div align="center">
 
-Built with **Next.js**, **React Flow (@xyflow/react)**, **Clerk**, **Neon + Prisma**, **Trigger.dev**, **Google Gemini**, and **Transloadit**.
+![NextFlow Banner](https://img.shields.io/badge/NextFlow-Workflow%20Engine%20v1.0-8b5cf6?style=for-the-badge&logo=diagram-next&logoColor=white)
 
----
+**A high-performance visual DAG workflow engine chaining Google Gemini LLM, FFmpeg video/image transforms, and file pipelines with zero glue code.**
 
-## The problem it solves
+[![Next.js](https://img.shields.io/badge/Next.js-16.2.1-black?style=flat-square&logo=next.js)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19.2-61dafb?style=flat-square&logo=react)](https://react.dev/)
+[![Trigger.dev](https://img.shields.io/badge/Trigger.dev-v4.6.4-f97316?style=flat-square)](https://trigger.dev/)
+[![Prisma](https://img.shields.io/badge/Prisma-6.19.2-2d3748?style=flat-square&logo=prisma)](https://prisma.io/)
+[![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL%20%2F%20Neon-336791?style=flat-square&logo=postgresql)](https://neon.tech/)
+[![OpenTelemetry](https://img.shields.io/badge/Telemetry-SigNoz%20OTLP-00b4d8?style=flat-square&logo=opentelemetry)](https://signoz.io/)
+[![Transloadit](https://img.shields.io/badge/Media-Transloadit%20FFmpeg-5856d6?style=flat-square)](https://transloadit.com/)
+[![License](https://img.shields.io/badge/License-ISC-green?style=flat-square)](./package.json)
 
-Building “LLM + file + crop + frame extract + another LLM” pipelines usually means juggling scripts, ad-hoc APIs, timeouts on serverless, and brittle inline media processing. NextFlow addresses that by:
+[🚀 Live Canvas](#-interactive-canvas--features) • [📐 Architecture](#-system-architecture) • [🧩 Node Catalog](#-node-catalog--capabilities) • [📡 API Reference](#-interactive-api-playground) • [🩺 Health Checks](#-service-health--telemetry) • [🛠 Quick Start](#-quickstart-guide)
 
-| Pain | How NextFlow helps |
-|------|---------------------|
-| Hard to visualize multi-step AI + media flows | **Canvas workflow** with typed ports (text, image, video, number) and cycle detection at run time |
-| Long-running or CPU-heavy work on Vercel | **Heavy work runs on Trigger.dev workers** (FFmpeg, Gemini); Next.js only orchestrates via `tasks.trigger` + polling |
-| Need durable URLs for uploads and model inputs | **Transloadit** for browser uploads and task outputs; **Gemini vision** uses fetched `inlineData`, not raw URLs in prompts |
-| Losing work between sessions | **Postgres persistence** of graphs + **debounced autosave**; optional **export/import JSON** |
-| Who ran what, and what failed | **Workflow run history** with per-node status, timing, and error snapshots |
-
----
-
-## Features
-
-### Canvas and editing
-
-- **Drag-and-drop style workflow graph** with **React Flow** and a **purple accent** for edges (`WORKFLOW_EDGE_COLOR`).
-- **Typed connections** — outputs must match inputs where enforced (e.g. text vs image vs video); invalid wiring is rejected at connection time.
-- **Undo / redo** and keyboard shortcuts (e.g. **Cmd/Ctrl+Z**, **Cmd/Ctrl+Shift+Z**); delete nodes or selected edges with **Delete / Backspace**.
-- **Export workflow** to JSON and **import** from JSON for backups or sharing.
-- **Cycle safety** — the executor detects cycles in the graph and errors clearly instead of infinite loops.
-
-### Node types
-
-| Node | Purpose |
-|------|---------|
-| **Text** | Static or editable text input; passed through the graph as text. |
-| **Upload image / Upload video** | Client uploads via **`POST /api/transloadit/upload`**; resulting HTTPS URLs flow to downstream nodes. |
-| **Run any LLM** | Calls **Google Gemini** (configurable model); supports **vision** when image URLs are wired in — images are **downloaded and sent as `inlineData`**, not as plain text URLs. Text + number inputs supported where applicable. |
-| **Crop image** | **FFmpeg**-based crop in a Trigger task; output URL via Transloadit. |
-| **Extract frame** | **FFmpeg** frame grab from video; supports timestamps as seconds or **percentage** (e.g. `50%`); output URL via Transloadit. |
-
-### Execution
-
-- **`POST /api/execute`** walks the DAG in **topological levels**, resolves upstream outputs, and runs **each node as a Trigger.dev task** (`passthrough-text-node`, `passthrough-media-url`, `run-gemini-llm`, `crop-image-ffmpeg`, `extract-frame-ffmpeg`).
-- Supports **full workflow**, **partial**, or **single-node** scopes (validated with **Zod**).
-- **No inline Gemini or FFmpeg inside Next.js route handlers** — keeps serverless fast and timeouts predictable; **`TRIGGER_SECRET_KEY`** must be set on the app host.
-
-### Persistence and history
-
-- Workflows stored in **PostgreSQL** (**Prisma** models: `Workflow`, `WorkflowRun`) with **user scoping** via **Clerk** `userId`.
-- **Autosave** debounces graph changes to **`/api/workflows`** so the canvas is not lost on refresh.
-- **Workflow History** panel lists runs with status, duration, and **per-node details** (inputs/outputs/errors).
-
-### Authentication
-
-- **Clerk** for sign-in/sign-up and **`UserButton`** in the app; API routes use **`auth()`** to restrict workflow and run data to the signed-in user.
+</div>
 
 ---
 
-## Integrations (overview)
+## 📖 Table of Contents
 
-| Service | Role in NextFlow |
-|---------|-------------------|
-| **Clerk** | Authentication; user identity for DB rows and API authorization. |
-| **Neon** (or any Postgres) | Primary database for workflows and run records; **Prisma** as ORM; **`@prisma/adapter-neon`** for serverless-friendly access. |
-| **Trigger.dev** | Background workers for **all node executions**; cloud image built with **FFmpeg** via `trigger.config.ts`; **`syncEnvVars`** can push Gemini + Transloadit secrets on deploy. |
-| **Google Gemini** | LLM + vision in `run-gemini-llm` task (`GEMINI_API_KEY`, optional `GEMINI_MODEL`, optional vision size cap). |
-| **Transloadit** | Assembly uploads from the browser and from tasks; **`TRANSLOADIT_AUTH_KEY`** / **`TRANSLOADIT_AUTH_SECRET`**; upload route validates with **Zod** (size/MIME). |
-
-Detailed env and troubleshooting: **`docs/TRIGGER_ENV.md`**, **`docs/TRANSLOADIT.md`**, **`docs/VERCEL.md`**.
+- [⚡️ Overview](#%EF%B8%8F-overview)
+- [📐 System Architecture](#-system-architecture)
+- [🧩 Node Catalog & Capabilities](#-node-catalog--capabilities)
+- [🚀 Interactive Canvas & Features](#-interactive-canvas--features)
+- [🩺 Service Health & Telemetry](#-service-health--telemetry)
+- [📡 Interactive API Playground](#-interactive-api-playground)
+- [🛠 Quickstart Guide](#-quickstart-guide)
+- [⚙️ Environment Configuration](#%EF%B8%8F-environment-configuration)
+- [🧪 End-to-End Verification](#-end-to-end-verification)
+- [❓ Interactive Troubleshooting & FAQ](#-interactive-troubleshooting--faq)
 
 ---
 
-## Architecture (short)
+## ⚡️ Overview
 
-```text
-Browser (React Flow + Zustand)
-    │  upload files → POST /api/transloadit/upload
-    │  save graph   → POST /api/workflows
-    │  run flow     → POST /api/execute
-    ▼
-Next.js API (Clerk + Prisma)
-    │  trigger + poll Trigger.dev runs
-    ▼
-Trigger.dev workers (FFmpeg + Gemini + Transloadit)
+Building multi-modal AI pipelines that combine LLM inference, video frame extraction, image cropping, and durable cloud storage usually turns into spaghetti scripts, fragile serverless timeouts, and lost execution states.
+
+**NextFlow** replaces glue code with an intuitive directed acyclic graph (DAG) canvas backed by a robust distributed execution engine:
+
+* **Topological DAG Runner**: Automatically determines node execution tiers, resolves upstream dependencies, and eliminates circular cycles.
+* **Decoupled Heavy Compute**: Long-running AI generation and FFmpeg media transforms execute on **Trigger.dev v4 workers**—never blocking the Next.js API layer.
+* **Direct Gemini Vision Inlining**: Fetches media securely into base64 `inlineData` buffers, providing Google Gemini with high-res multimodal inputs without exposing raw URLs.
+* **Distributed Observability**: Emits OpenTelemetry (OTLP) Traces and structured logs straight to **SigNoz**, correlating workflow IDs, run IDs, and per-node execution timings.
+* **Dual Auth Support**: Supports session-based user authentication via **Clerk** alongside machine-to-machine admin automation via `NEXTFLOW_API_KEY`.
+
+---
+
+## 📐 System Architecture
+
+The following diagram illustrates how requests flow from the frontend canvas through authentication, topological dependency resolution, background workers, and telemetry:
+
+```mermaid
+flowchart TD
+    subgraph Client ["Client Browser / SDK"]
+        UI["React Flow Canvas (@xyflow/react)"]
+        Store["Zustand Workflow Store"]
+        SDK["External API / cURL"]
+    end
+
+    subgraph API_Gateway ["Next.js 16 Edge / Serverless Layer"]
+        AuthMiddleware{"Auth Guard\n(Clerk Session OR x-api-key)"}
+        StatusRoute["GET /api/status\n(Health & Telemetry Info)"]
+        WorkflowRoute["POST /api/workflows\n(Graph Autosave & Switcher)"]
+        ExecuteRoute["POST /api/execute\n(Topological DAG Resolver)"]
+        UploadRoute["POST /api/transloadit/upload\n(Signed Direct Upload)"]
+    end
+
+    subgraph Data_Layer ["Persistence & Cloud Storage"]
+        Postgres[("Neon / PostgreSQL\n(Workflows & WorkflowRuns)")]
+        TransloaditStorage["Transloadit Media CDN"]
+    end
+
+    subgraph Execution_Engine ["Trigger.dev v4 Distributed Workers"]
+        T1["passthrough-text-node"]
+        T2["passthrough-media-url"]
+        T3["run-gemini-llm (Google AI Studio)"]
+        T4["crop-image-ffmpeg"]
+        T5["extract-frame-ffmpeg"]
+    end
+
+    subgraph Observability ["Observability & Metrics"]
+        SigNoz["SigNoz OTLP Collector (:4318)\nTraces + Structured Logs"]
+    end
+
+    UI -->|Autosave Graph| WorkflowRoute
+    UI -->|Direct Upload| UploadRoute
+    UI -->|Execute Run| ExecuteRoute
+    SDK -->|Admin Request| AuthMiddleware
+
+    WorkflowRoute --> Postgres
+    ExecuteRoute --> AuthMiddleware
+    ExecuteRoute -->|Query & Persist Run| Postgres
+    ExecuteRoute -->|Queue Step Execution| ExecutionEngine
+    
+    T3 -->|Download Media Buffer| TransloaditStorage
+    T4 & T5 -->|Upload Processed Artifacts| TransloaditStorage
+    
+    ExecuteRoute -.->|Async OTLP Spans & Logs| SigNoz
+    StatusRoute -.->|Ping OTel / Version| SigNoz
+    StatusRoute -.->|Count Rows| Postgres
 ```
 
-- **Vision:** Image URLs must be **public HTTPS** (e.g. Transloadit) so the worker can fetch them for Gemini **`inlineData`**.
-- **Local dev:** `npm run trigger:dev` runs tasks on your machine; install **FFmpeg** or set **`FFMPEG_PATH`** if needed (`docs/TRIGGER_ENV.md`).
-- **Cloud:** `npm run trigger:deploy` publishes tasks and syncs env; app still needs **`TRIGGER_SECRET_KEY`** on Vercel.
+---
+
+## 🧩 Node Catalog & Capabilities
+
+<details open>
+<summary><b>1. Run Any LLM (Google Gemini)</b></summary>
+<br>
+
+* **Task ID**: `run-gemini-llm`
+* **Default Model**: `gemini-2.5-flash` (configurable via `GEMINI_MODEL` or node parameters)
+* **Ports**:
+  * Inputs: `prompt` (string), `image` (image URL), `systemInstruction` (optional string), `temperature` (optional number)
+  * Outputs: `text` (generated response string)
+* **Vision Capability**: Downloads remote media securely into memory and constructs native `inlineData` parts with accurate MIME types before prompting Gemini.
+
+```json
+{
+  "nodeType": "llm",
+  "data": {
+    "model": "gemini-2.5-flash",
+    "prompt": "Analyze this screenshot and list UI improvements.",
+    "temperature": 0.7
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>2. Upload Media (Image & Video)</b></summary>
+<br>
+
+* **Task ID**: `passthrough-media-url`
+* **Ports**:
+  * Inputs: Direct file upload via Transloadit assembly
+  * Outputs: `url` (valid HTTPS URL)
+* **Validation**: Enforces HTTPS protocols, valid MIME types, and file size constraints via Zod before passing downstream.
+</details>
+
+<details>
+<summary><b>3. Crop Image (FFmpeg)</b></summary>
+<br>
+
+* **Task ID**: `crop-image-ffmpeg`
+* **Ports**:
+  * Inputs: `imageUrl` (string), `x` (number), `y` (number), `width` (number), `height` (number)
+  * Outputs: `url` (cropped image URL uploaded to Transloadit)
+* **Worker Execution**: Runs `ffmpeg -i <input> -filter:v "crop=w:h:x:y" <output>` inside containerized Trigger.dev workers.
+</details>
+
+<details>
+<summary><b>4. Extract Video Frame (FFmpeg)</b></summary>
+<br>
+
+* **Task ID**: `extract-frame-ffmpeg`
+* **Ports**:
+  * Inputs: `videoUrl` (string), `timestamp` (seconds, e.g. `12.5` or percentage `50%`)
+  * Outputs: `url` (extracted frame JPEG URL)
+* **Percentage Seeker**: Uses FFmpeg probes to inspect total duration and calculates exact frame offsets accurately.
+</details>
+
+<details>
+<summary><b>5. Text Input & Constant</b></summary>
+<br>
+
+* **Task ID**: `passthrough-text-node`
+* **Ports**:
+  * Inputs: Direct textarea input or linked upstream string
+  * Outputs: `text` (passthrough string)
+* **Use Case**: Master system prompts, user templates, or structured JSON configurations.
+</details>
 
 ---
 
-## Tech stack
+## 🚀 Interactive Canvas & Features
 
-- **Framework:** Next.js 16, React 19, TypeScript  
-- **UI:** Tailwind CSS 4, Lucide icons  
-- **State:** Zustand (canvas + undo)  
-- **Workflow graph:** `@xyflow/react`  
-- **Validation:** Zod  
-- **Media:** `ffmpeg-static` (local fallback); Trigger **Docker** layer for cloud FFmpeg  
+### Core Canvas Highlights
+
+1. **Multi-Canvas Switcher**: Seamlessly create, switch, and duplicate workflows directly in the canvas toolbar with the dropdown selector and `+ New` button.
+2. **Topological Level Solver**: Automatically executes independent nodes concurrently while strictly ordering dependent operations.
+3. **Execution Scopes**:
+   * `Full`: Executes all nodes from roots to terminal leaves.
+   * `Partial`: Executes selected nodes and their prerequisite ancestors.
+   * `Single`: Executes a single isolated node with mock or resolved inputs.
+4. **Resilient Graph History**: Undo/Redo stack with keyboard shortcuts (`Cmd+Z` / `Cmd+Shift+Z`), node duplication, and clean JSON export/import.
+5. **Real-Time Step Details**: Detailed slide-out logs showing raw inputs, outputs, execution duration, and sanitized error traces.
 
 ---
 
-## Quick start
+## 🩺 Service Health & Telemetry
+
+NextFlow includes a live health check endpoint at `/api/status` and native OpenTelemetry telemetry streaming.
+
+### 1. Endpoint: `GET /api/status`
+
+Verifies database connectivity, counts total workflows and runs, and inspects the SigNoz OTel Collector.
+
+```bash
+# Query health status
+curl -s http://localhost:3000/api/status | jq .
+```
+
+<details open>
+<summary><b>Click to view sample health response</b></summary>
+
+```json
+{
+  "status": "online",
+  "engine": "NextFlow Workflow Engine v1.0.0",
+  "database": {
+    "connected": true,
+    "latencyMs": 42,
+    "counts": {
+      "workflows": 10,
+      "runs": 48
+    }
+  },
+  "signoz": {
+    "connected": true,
+    "endpoint": "http://127.0.0.1:4318",
+    "version": "active",
+    "apiKeyConfigured": false
+  },
+  "timestamp": "2026-10-06T01:05:00.000Z"
+}
+```
+</details>
+
+### 2. SigNoz Traces & Structured Logs
+
+Whenever a workflow executes, NextFlow transmits:
+* **Distributed Spans** for the root workflow run and each node execution step to `/v1/traces`.
+* **Structured OTel Logs** with severity levels (`INFO` / `ERROR`), node timings, and user correlations to `/v1/logs`.
+* **Sanitized Logs**: Sensitive API keys and tokens are stripped before leaving the server.
+
+---
+
+## 📡 Interactive API Playground
+
+NextFlow provides RESTful endpoints authenticated via Clerk user sessions or the `x-api-key` header.
+
+### 1. Save or Update a Workflow
+
+```bash
+curl -X POST http://localhost:3000/api/workflows \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-nextflow-api-key" \
+  -d '{
+    "name": "Gemini Summarizer Workflow",
+    "graphJson": {
+      "nodes": [
+        { "id": "text-1", "type": "text", "data": { "text": "Explain quantum computing in 2 sentences." } },
+        { "id": "llm-1", "type": "llm", "data": { "model": "gemini-2.5-flash" } }
+      ],
+      "edges": [
+        { "id": "e1", "source": "text-1", "target": "llm-1", "sourceHandle": "text", "targetHandle": "prompt" }
+      ]
+    }
+  }'
+```
+
+### 2. Execute a Workflow Run
+
+```bash
+curl -X POST http://localhost:3000/api/execute \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-nextflow-api-key" \
+  -d '{
+    "scope": "full",
+    "name": "Gemini Summarizer Workflow",
+    "nodes": [
+      { "id": "text-1", "type": "text", "data": { "text": "What are quantum qubits?" } },
+      { "id": "llm-1", "type": "llm", "data": { "model": "gemini-2.5-flash" } }
+    ],
+    "edges": [
+      { "id": "e1", "source": "text-1", "target": "llm-1", "sourceHandle": "text", "targetHandle": "prompt" }
+    ]
+  }'
+```
+
+---
+
+## 🛠 Quickstart Guide
+
+### Prerequisites
+* **Node.js**: `v20.x` or `v24.x`
+* **Docker Desktop**: For running PostgreSQL and the OpenTelemetry / SigNoz Collector
+* **API Credentials**: Google AI Studio Gemini API Key, Clerk Auth Keys, Transloadit Credentials
+
+### 1. Clone & Install Dependencies
+
+```bash
+git clone https://github.com/HIMpcgithub3000/nextflow.git
+cd nextflow
+npm install
+```
+
+### 2. Configure Environment
+
+Copy the example file and populate required credentials:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Fill at minimum (see `.env.example` and docs):
-
-- **`DATABASE_URL`** — Postgres (Neon recommended for serverless)
-- **Clerk** — `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`
-- **`GEMINI_API_KEY`** — Google AI Studio
-- **Trigger** — `TRIGGER_PROJECT_ID` or `TRIGGER_PROJECT_REF`, `TRIGGER_SECRET_KEY`
-- **Transloadit** — `TRANSLOADIT_AUTH_KEY`, `TRANSLOADIT_AUTH_SECRET`
-
-Then:
+### 3. Initialize Database
 
 ```bash
-npm install
+npx prisma generate
 npx prisma migrate dev
-npm run dev
 ```
 
-- App: **[http://localhost:3000/workflow](http://localhost:3000/workflow)** (home redirects).
-- Local Trigger worker: **`npm run trigger:dev`** — requires Trigger + Gemini env; see **`docs/TRIGGER_ENV.md`**.
+### 4. Run Development Servers
 
-For **crop / extract-frame** locally, ensure **FFmpeg** is on `PATH` or set **`FFMPEG_PATH`**. **Percentage** seeks on extract-frame derive duration from **ffmpeg** stderr (cloud-friendly).
+```bash
+# Terminal 1: Next.js Frontend & API Server
+npm run dev
 
----
+# Terminal 2: Trigger.dev Background Worker
+npm run trigger:dev
+```
 
-## Scripts
-
-| Command | Description |
-|--------|-------------|
-| `npm run dev` | Next.js development server |
-| `npm run build` | Production build |
-| `npm run start` | Production server |
-| `npm run lint` | ESLint |
-| `npm run trigger:dev` | Local Trigger.dev worker |
-| `npm run trigger:deploy` | Deploy Trigger tasks + sync env (see `trigger.config.ts`) |
-| `npm run prisma:generate` | Regenerate Prisma Client |
-| `npm run prisma:migrate` | `prisma migrate dev` |
-| `npm run prisma:studio` | Prisma Studio |
+Open [http://localhost:3000/workflow](http://localhost:3000/workflow) in your browser.
 
 ---
 
-## Deploy to production (outline)
+## ⚙️ Environment Configuration
 
-1. Push the repo to GitHub and import in **[Vercel](https://vercel.com/new)**.
-2. Set environment variables — full checklist in **`docs/VERCEL.md`** (Clerk, `DATABASE_URL`, `TRIGGER_SECRET_KEY`, Transloadit, etc.).
-3. Run migrations: `DATABASE_URL="…" npx prisma migrate deploy`.
-4. Deploy Trigger workers: **`npm run trigger:deploy`** so cloud tasks match `src/trigger/tasks.ts` and production has **`GEMINI_API_KEY`** (and Transloadit) on the Trigger project.
-5. Use a **production** Trigger secret on Vercel, not the dev key.
-
-Prefer Neon’s **pooled** connection string for serverless.
-
----
-
-## Documentation in this repo
-
-| Doc | Topic |
-|-----|--------|
-| `docs/TRIGGER_ENV.md` | Gemini on Trigger, FFmpeg, `syncEnvVars`, API ↔ Trigger |
-| `docs/TRANSLOADIT.md` | Upload auth errors, assembly setup |
-| `docs/VERCEL.md` | Vercel env checklist |
+| Variable | Required | Description |
+|:---|:---:|:---|
+| `DATABASE_URL` | **Yes** | PostgreSQL connection string (supports Neon pooled URLs) |
+| `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` | **Yes** | Clerk publishable frontend key |
+| `CLERK_SECRET_KEY` | **Yes** | Clerk backend secret key |
+| `GEMINI_API_KEY` | **Yes** | Google AI Studio API key |
+| `GEMINI_MODEL` | No | Default model override (Default: `gemini-2.5-flash`) |
+| `TRIGGER_PROJECT_ID` | **Yes** | Trigger.dev project identifier |
+| `TRIGGER_SECRET_KEY` | **Yes** | Trigger.dev server secret key (`tr_dev_...` or `tr_prod_...`) |
+| `TRANSLOADIT_AUTH_KEY` | **Yes** | Transloadit public API key |
+| `TRANSLOADIT_AUTH_SECRET` | **Yes** | Transloadit API secret |
+| `NEXTFLOW_API_KEY` | No | Secret key for automated M2M admin calls |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | No | OTLP collector endpoint (Default: `http://127.0.0.1:4318`) |
+| `SIGNOZ_ENDPOINT` | No | SigNoz frontend or API URL (Default: `http://127.0.0.1:8080`) |
+| `SIGNOZ_API_KEY` | No | Ingestion/API key for SigNoz cloud |
 
 ---
 
-## License
+## 🧪 End-to-End Verification
 
-ISC (see `package.json`).
+Follow these steps to confirm all services are healthy and operational:
+
+```bash
+# 1. Typecheck & Build validation
+npm run build
+
+# 2. Database connectivity test
+npx prisma db execute --stdin <<< "SELECT 1;"
+
+# 3. Service health check
+curl -f http://localhost:3000/api/status
+
+# 4. OpenTelemetry Collector check
+curl -X POST http://127.0.0.1:4318/v1/traces -H "Content-Type: application/json" -d '{"resourceSpans":[]}'
+```
+
+---
+
+## ❓ Interactive Troubleshooting & FAQ
+
+<details>
+<summary><b>Q: My Gemini node fails with "GoogleGenerativeAI Error: API key not valid"</b></summary>
+<br>
+
+**Solution**:
+1. Check that `GEMINI_API_KEY` is set inside `.env.local`.
+2. When deploying to Trigger.dev cloud workers, run `npm run trigger:deploy` so that `trigger.config.ts` synchronizes your local environment variables with the cloud worker environment.
+</details>
+
+<details>
+<summary><b>Q: Uploaded images or videos aren't rendering or processing</b></summary>
+<br>
+
+**Solution**:
+Ensure your `TRANSLOADIT_AUTH_KEY` and `TRANSLOADIT_AUTH_SECRET` are valid. NextFlow requires assemblies to produce public HTTPS URLs so downstream workers (FFmpeg / Gemini) can fetch assets.
+</details>
+
+<details>
+<summary><b>Q: How do I bypass Clerk authentication for CI/CD or automated scripts?</b></summary>
+<br>
+
+**Solution**:
+Configure `NEXTFLOW_API_KEY=your_secret_admin_key` in `.env.local`. Pass it as a header:
+`-H "x-api-key: your_secret_admin_key"` in any `/api/execute`, `/api/workflows`, or `/api/status` request.
+</details>
+
+---
+
+<div align="center">
+  <sub>Built with ❤️ by the NextFlow Team. Engineered for seamless visual AI workflows.</sub>
+</div>

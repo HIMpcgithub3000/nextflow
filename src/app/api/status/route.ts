@@ -30,7 +30,7 @@ export async function GET(req: Request) {
   }
 
   // Check SigNoz via API
-  const signozEndpoint = process.env.SIGNOZ_ENDPOINT || "http://127.0.0.1:8080";
+  const signozEndpoint = (process.env.SIGNOZ_ENDPOINT || "http://127.0.0.1:8080").trim();
   const signozApiKey = process.env.SIGNOZ_API_KEY?.trim() || "";
   let signozOk = false;
   let signozVersion = "";

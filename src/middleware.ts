@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const isProtectedRoute = createRouteMatcher([
   "/workflow(.*)",
+  "/canvas(.*)",
   "/api/workflows(.*)",
   "/api/runs(.*)",
   "/api/execute(.*)",
