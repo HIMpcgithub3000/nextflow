@@ -15,7 +15,7 @@
 [![Transloadit](https://img.shields.io/badge/Media-Transloadit%20FFmpeg-5856d6?style=flat-square)](https://transloadit.com/)
 [![License](https://img.shields.io/badge/License-ISC-green?style=flat-square)](./package.json)
 
-[🚀 Live Canvas](#-interactive-canvas--features) • [📐 Architecture](#-system-architecture) • [🧩 Node Catalog](#-node-catalog--capabilities) • [📡 API Reference](#-interactive-api-playground) • [🩺 Health Checks](#-service-health--telemetry) • [🛠 Quick Start](#-quickstart-guide)
+[📘 Engineering Handbook](./HANDBOOK.md) • [🚀 Live Canvas](#-interactive-canvas--features) • [📐 Architecture](#-system-architecture) • [🧩 Node Catalog](#-node-catalog--capabilities) • [📡 API Reference](#-interactive-api-playground) • [🩺 Health Checks](#-service-health--telemetry) • [🛠 Quick Start](#-quickstart-guide)
 
 </div>
 
